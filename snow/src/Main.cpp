@@ -9,9 +9,11 @@
 #include <d2d1.h>
 #include <dwmapi.h>
 #include <shellapi.h>  // --- 露露叶新增：托盘图标必须的头文件 ---
+#include <commctrl.h>  // 滑块控件需要这个
 
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "comctl32.lib")
 // shell32.lib 通常是默认链接的，如果报错请加上 #pragma comment(lib,
 // "shell32.lib")
 
@@ -46,7 +48,203 @@ BOOL             InitInstance(HINSTANCE, int);
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK About(HWND, UINT, WPARAM, LPARAM);
 
-// --- 露露叶新增：托盘图标管理函数 ---
+// 全局设置状态
+HWND  g_hSettingsDlg = nullptr;  // 记录设置窗口是不是开着
+int   g_snowCount    = 500;      // 记住当前的雪量
+float g_snowSpeed    = 1.0f;     // 记住当前的速度
+float g_snowWind     = 0.0f;     // 记住当前的风力
+
+// ---------------------------------------------------------
+//  设置窗口的处理函数 (非模态版)
+// ---------------------------------------------------------
+INT_PTR CALLBACK Settings(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    UNREFERENCED_PARAMETER(lParam);
+    switch (message)
+    {
+    case WM_INITDIALOG: {
+        // === 1. 窗口居中逻辑 (再也不用忍受左上角了) ===
+        RECT rcOwner, rcDlg;
+        // 获取屏幕大小
+        GetWindowRect(GetDesktopWindow(), &rcOwner);
+        // 获取对话框本身大小
+        GetWindowRect(hDlg, &rcDlg);
+
+        int dlgW    = rcDlg.right - rcDlg.left;
+        int dlgH    = rcDlg.bottom - rcDlg.top;
+        int screenW = rcOwner.right - rcOwner.left;
+        int screenH = rcOwner.bottom - rcOwner.top;
+
+        // 计算居中坐标
+        int x = (screenW - dlgW) / 2;
+        int y = (screenH - dlgH) / 2;
+
+        // 移动窗口
+        SetWindowPos(hDlg, HWND_TOP, x, y, 0, 0, SWP_NOSIZE);
+
+        // === 2. 初始化滑块范围 (更合理的范围) ===
+
+        // [雪量] 范围 0 ~ 20。每格代表 100 片。最大 2000 片。
+        SendDlgItemMessage(
+            hDlg, IDC_SLIDER_COUNT, TBM_SETRANGE, TRUE, MAKELPARAM(0, 20));
+
+        // [速度] 范围 1 ~ 30。代表 0.1x ~ 3.0x。之前是 50 太快了。
+        SendDlgItemMessage(
+            hDlg, IDC_SLIDER_SPEED, TBM_SETRANGE, TRUE, MAKELPARAM(1, 30));
+
+        // [风力] 范围 0 ~ 40。中间是 20。代表 -2.0 ~ +2.0。之前是 -5~+5
+        // 太大了。
+        SendDlgItemMessage(
+            hDlg, IDC_SLIDER_WIND, TBM_SETRANGE, TRUE, MAKELPARAM(0, 40));
+
+        // === 3. 回显当前数据 (注意数学转换) ===
+
+        // 全局变量是 500，滑块位置应该是 500 / 100 = 5
+        SendDlgItemMessage(
+            hDlg, IDC_SLIDER_COUNT, TBM_SETPOS, TRUE, g_snowCount / 100);
+
+        // 速度: 1.0 -> 10
+        SendDlgItemMessage(
+            hDlg, IDC_SLIDER_SPEED, TBM_SETPOS, TRUE, (int)(g_snowSpeed * 10));
+
+        // 风力: 0.0 -> 20 (20是中间点)
+        SendDlgItemMessage(hDlg,
+                           IDC_SLIDER_WIND,
+                           TBM_SETPOS,
+                           TRUE,
+                           (int)(g_snowWind * 10 + 20));
+
+        // === 4. 更新文字显示 ===
+        wchar_t buf[32];
+        wsprintf(buf, L"%d", g_snowCount);  // 显示实际数量
+        SetDlgItemText(hDlg, IDC_LABEL_COUNT, buf);
+
+        swprintf_s(buf, L"%.1f x", g_snowSpeed);
+        SetDlgItemText(hDlg, IDC_LABEL_SPEED, buf);
+
+        swprintf_s(buf, L"%.1f", g_snowWind);
+        SetDlgItemText(hDlg, IDC_LABEL_WIND, buf);
+
+        return (INT_PTR)TRUE;
+    }
+
+    case WM_HSCROLL:  // 拖动滑块时
+    {
+        // 获取控件的“刻度值”
+        int countPos =
+            SendDlgItemMessage(hDlg, IDC_SLIDER_COUNT, TBM_GETPOS, 0, 0);
+        int speedPos =
+            SendDlgItemMessage(hDlg, IDC_SLIDER_SPEED, TBM_GETPOS, 0, 0);
+        int windPos =
+            SendDlgItemMessage(hDlg, IDC_SLIDER_WIND, TBM_GETPOS, 0, 0);
+
+        // === 数学转换 (刻度 -> 实际值) ===
+        int   realCount = countPos * 100;          // 1格 = 100片
+        float realSpeed = speedPos / 10.0f;        // 10 = 1.0x
+        float realWind  = (windPos - 20) / 10.0f;  // 20 = 0.0, 40 = 2.0
+
+        // === 更新 UI 文字 ===
+        wchar_t buf[32];
+        wsprintf(buf, L"%d", realCount);
+        SetDlgItemText(hDlg, IDC_LABEL_COUNT, buf);
+
+        swprintf_s(buf, L"%.1f x", realSpeed);
+        SetDlgItemText(hDlg, IDC_LABEL_SPEED, buf);
+
+        swprintf_s(buf, L"%.1f", realWind);
+        SetDlgItemText(hDlg, IDC_LABEL_WIND, buf);
+
+        // 实时预览解注这里：
+        // g_Engine.SetFlakeCount(realCount);
+        // g_Engine.SetGravity(realSpeed);
+        // g_Engine.SetWind(realWind);
+
+        return (INT_PTR)TRUE;
+    }
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDC_BTN_RESET)
+        {
+            // 1. 恢复默认全局变量
+            g_snowCount = 500;
+            g_snowSpeed = 1.0f;
+            g_snowWind  = 0.0f;
+
+            // 2. 立即应用到引擎 (所见即所得)
+            g_Engine.SetFlakeCount(g_snowCount);
+            g_Engine.SetGravity(g_snowSpeed);
+            g_Engine.SetWind(g_snowWind);
+
+            // 3. 刷新界面控件位置 (让滑块跳回去)
+            SendDlgItemMessage(hDlg,
+                               IDC_SLIDER_COUNT,
+                               TBM_SETPOS,
+                               TRUE,
+                               g_snowCount / 100);  // 500 -> 5
+            SendDlgItemMessage(hDlg,
+                               IDC_SLIDER_SPEED,
+                               TBM_SETPOS,
+                               TRUE,
+                               (int)(g_snowSpeed * 10));  // 1.0 -> 10
+            SendDlgItemMessage(hDlg,
+                               IDC_SLIDER_WIND,
+                               TBM_SETPOS,
+                               TRUE,
+                               (int)(g_snowWind * 10 + 20));  // 0.0 -> 20
+
+            // 4. 刷新界面文字
+            wchar_t buf[32];
+
+            wsprintf(buf, L"%d", g_snowCount);
+            SetDlgItemText(hDlg, IDC_LABEL_COUNT, buf);
+
+            swprintf_s(buf, L"%.1f x", g_snowSpeed);
+            SetDlgItemText(hDlg, IDC_LABEL_SPEED, buf);
+
+            swprintf_s(buf, L"%.1f", g_snowWind);
+            SetDlgItemText(hDlg, IDC_LABEL_WIND, buf);
+
+            return (INT_PTR)TRUE;
+        }
+        else if (LOWORD(wParam) == IDOK)
+        {
+            // === 点击确定：计算并应用 ===
+            int countPos =
+                SendDlgItemMessage(hDlg, IDC_SLIDER_COUNT, TBM_GETPOS, 0, 0);
+            int speedPos =
+                SendDlgItemMessage(hDlg, IDC_SLIDER_SPEED, TBM_GETPOS, 0, 0);
+            int windPos =
+                SendDlgItemMessage(hDlg, IDC_SLIDER_WIND, TBM_GETPOS, 0, 0);
+
+            // 1. 转换回实际参数
+            int   realCount = countPos * 100;
+            float realSpeed = speedPos / 10.0f;
+            float realWind  = (windPos - 20) / 10.0f;
+
+            // 2. 存入全局变量
+            g_snowCount = realCount;
+            g_snowSpeed = realSpeed;
+            g_snowWind  = realWind;
+
+            // 3. 应用到引擎
+            g_Engine.SetFlakeCount(g_snowCount);
+            g_Engine.SetGravity(g_snowSpeed);
+            g_Engine.SetWind(g_snowWind);
+
+            return (INT_PTR)TRUE;
+        }
+        else if (LOWORD(wParam) == IDCANCEL)
+        {
+            DestroyWindow(hDlg);
+            g_hSettingsDlg = nullptr;
+            return (INT_PTR)TRUE;
+        }
+        break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+// 托盘图标管理函数
 void InitNotifyIcon(HWND hWnd)
 {
     g_nid.cbSize = sizeof(NOTIFYICONDATA);
@@ -70,7 +268,7 @@ void InitNotifyIcon(HWND hWnd)
 
 void DeleteNotifyIcon() { Shell_NotifyIcon(NIM_DELETE, &g_nid); }
 
-// 渲染函数 (保持不变)
+// 渲染函数
 void Render(HWND hWnd)
 {
     if (!pRenderTarget)
@@ -98,6 +296,10 @@ void Render(HWND hWnd)
         // 强制 DPI 为 96 (1:1 物理像素)
         pRenderTarget->SetDpi(96.0f, 96.0f);
 
+        // 既然能走到这里，说明 RenderTarget 肯定创建成功了。
+        // 通知引擎：旧的 RenderTarget 没了，请把关联的位图资源扔掉，下次重画。
+        g_Engine.DiscardDeviceResources();
+
         if (!pRadialBrush)
         {
             D2D1_GRADIENT_STOP stops[] = {
@@ -124,7 +326,26 @@ void Render(HWND hWnd)
     pRenderTarget->BeginDraw();
     pRenderTarget->Clear(D2D1::ColorF(0, 0, 0, 0));
     g_Engine.Render(pRenderTarget, pRadialBrush);
-    pRenderTarget->EndDraw();
+
+    HRESULT hr = pRenderTarget->EndDraw();
+
+    // --- 露露叶新增：设备丢失处理 ---
+    if (hr == D2DERR_RECREATE_TARGET)
+    {
+        // 显卡掉了，释放所有资源，下次重来
+        if (pRenderTarget)
+        {
+            pRenderTarget->Release();
+            pRenderTarget = nullptr;
+        }
+        if (pRadialBrush)
+        {
+            pRadialBrush->Release();
+            pRadialBrush = nullptr;
+        }
+        // 通知引擎也扔掉它的图片
+        g_Engine.DiscardDeviceResources();
+    }
 }
 
 int APIENTRY wWinMain(_In_ HINSTANCE     hInstance,
@@ -137,6 +358,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE     hInstance,
 
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
+
+    INITCOMMONCONTROLSEX icex;
+    icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
+    icex.dwICC  = ICC_WIN95_CLASSES;  // 启用滑块等控件
+    InitCommonControlsEx(&icex);
 
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     // 强制使用硬编码的类名，确保和 WindowUtils 匹配
@@ -166,7 +392,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE     hInstance,
     // 所有的驱动力都来自 WM_TIMER 消息
     while (GetMessage(&msg, nullptr, 0, 0))
     {
-        if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
+        // 如果消息是发给非模态对话框的，就让对话框自己处理
+        // 否则才分发给主窗口
+        if (!g_hSettingsDlg || !IsDialogMessage(g_hSettingsDlg, &msg))
         {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
@@ -242,9 +470,6 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
     // --- 露露叶新增：创建托盘图标 ---
     InitNotifyIcon(hWnd);
-    // --- 露露叶新增：启动心脏起搏器 ---
-    // 每 15 毫秒触发一次 WM_TIMER (大约 66 FPS)
-    SetTimer(hWnd, IDT_TIMER_SNOW, 15, nullptr);
 
     return TRUE;
 }
@@ -255,6 +480,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     switch (message)
     {
+    case WM_CREATE:
+        // 1. 开启雪花定时器 (如果你之前是在 WinMain
+        // 里开的，这里可以不写，但建议统一放在这)
+        SetTimer(hWnd, IDT_TIMER_SNOW, 33, NULL);
+
+        // 2. 这里的核心任务：假装用户点击了“设置”，让窗口弹出来
+        // PostMessage 是异步的，等窗口完全显示出来后，设置界面就会弹出来
+        PostMessage(hWnd, WM_COMMAND, IDM_TRAY_SETTING, 0);
+        break;
+
     case WM_KEYDOWN:
         if (wParam == VK_ESCAPE)
             DestroyWindow(hWnd);
@@ -323,10 +558,22 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             DestroyWindow(hWnd);  // 触发 WM_DESTROY
             break;
         case IDM_TRAY_SETTING:
-            MessageBox(hWnd,
+            /*MessageBox(hWnd,
                        L"设置功能即将在下一个版本上线！\n请等待女仆酱的更新~",
                        L"提示",
-                       MB_OK | MB_ICONINFORMATION);
+                       MB_OK | MB_ICONINFORMATION);*/
+            // 如果窗口还没创建，就创建它
+            if (!g_hSettingsDlg)
+            {
+                g_hSettingsDlg = CreateDialog(
+                    hInst, MAKEINTRESOURCE(IDD_SETTINGS), hWnd, Settings);
+                ShowWindow(g_hSettingsDlg, SW_SHOW);
+            }
+            else
+            {
+                // 如果已经创建了（可能被最小化或挡住了），就把它带到前台
+                SetForegroundWindow(g_hSettingsDlg);
+            }
             break;
 
         case IDM_ABOUT:

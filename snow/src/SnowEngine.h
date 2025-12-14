@@ -35,12 +35,32 @@ class SnowEngine
     void Render(ID2D1HwndRenderTarget    *pRenderTarget,
                 ID2D1RadialGradientBrush *pBrush);
 
+    // 资源清理：当设备丢失或重置时，需要清理缓存的位图
+    void DiscardDeviceResources();
+
+    // --- 新增参数控制 ---
+    void SetFlakeCount(int count);
+    void SetGravity(float gravity);
+    void SetWind(float wind);
+
   private:
     std::vector<Snowflake> m_snowflakes;  // 这里管理所有雪花
 
-    // 辅助函数
+    float m_speedFactor = 1.0f;  // 默认 1.0
+    float m_windForce   = 0.0f;  // 默认 0.0
+
+    // 缓存的雪花位图
+    ID2D1Bitmap *m_pSnowBitmap = nullptr;
+
+    // 均匀分布采样
     float RandomFloat(float min, float max);
+
+    // 正态分布采样
+    float RandomNormal(float mean, float stddev);
 
     // 重置单颗雪花的函数(复用逻辑)
     void ResetSnowflake(Snowflake &s, int screenWidth, int screenHeight);
+
+    // 内部函数：创建母版图片
+    void CreateSnowBitmap(ID2D1HwndRenderTarget *pRenderTarget);
 };

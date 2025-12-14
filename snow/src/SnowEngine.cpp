@@ -5,8 +5,23 @@
 SnowEngine::SnowEngine() {}
 
 // 析构函数
-SnowEngine::~SnowEngine() { m_snowflakes.clear(); }
+SnowEngine::~SnowEngine()
+{
+    m_snowflakes.clear();
+    DiscardDeviceResources();  // 记得析构时清理图片
+}
 
+// 释放显存资源
+void SnowEngine::DiscardDeviceResources()
+{
+    if (m_pSnowBitmap)
+    {
+        m_pSnowBitmap->Release();
+        m_pSnowBitmap = nullptr;
+    }
+}
+
+// 均匀分布采样
 float SnowEngine::RandomFloat(float min, float max)
 {
     static std::random_device             rd;
@@ -15,28 +30,62 @@ float SnowEngine::RandomFloat(float min, float max)
     return dis(gen);
 }
 
+// 正态分布采样
+float SnowEngine::RandomNormal(float mean, float stddev)
+{
+    static std::random_device rd;
+    static std::mt19937       gen(rd());
+
+    // 使用 std::normal_distribution 生成符合高斯分布的随机数
+    std::normal_distribution<float> dis(mean, stddev);
+
+    return dis(gen);
+}
+
 // 辅助函数：重置雪花状态
 void SnowEngine::ResetSnowflake(Snowflake &s, int screenWidth, int screenHeight)
 {
     s.landed = false;
     s.life   = 1.0f;  // 满血复活
-    s.x      = RandomFloat(0.0f, (float)screenWidth);
 
-    // 决定大小
-    s.maxSize = RandomFloat(2.0f, 5.0f);
+    // 随机出生在屏幕上方
+    s.x = RandomFloat(0.0f, (float)screenWidth);
+    s.y = RandomFloat(-50.0f, -10.0f);
+
+    // === 核心修改：大小使用正态分布 ===
+    // 均值 5.0 (大部分雪花是中等偏大)
+    // 标准差 2.0 (允许一定的波动)
+    float rawSize = RandomNormal(5.0f, 2.0f);
+
+    // [重要] 截断 (Clamp)
+    // 即使是正态分布，也要防止出现太离谱的值
+    if (rawSize < 2.5f)
+        rawSize = 2.5f;  // 最小限制
+    if (rawSize > 12.0f)
+        rawSize = 12.0f;  // 最大限制 (偶尔出现的特大雪花)
+
+    s.maxSize = rawSize;
     s.size    = s.maxSize;
-    s.speed   = RandomFloat(1.0f, 3.0f);
-    s.angle   = RandomFloat(0.0f, 3.14f * 2);
 
-    // --- 核心修改：重生时必须在屏幕上方 ---
-    // 设为负数，保证它从屏幕外落下，这样就不会一出生就卡在顶部窗口上
-    s.y = RandomFloat(-50.0f, -5.0f);
+    // === 速度与大小挂钩 (模拟景深) ===
+    // 基础速度 + 大小加成 (越大的落得越快)
+    float baseSpeed = 1.0f + (s.size - 2.5f) * 0.4f;
+
+    // 速度也加一点点正态扰动，让它更自然
+    s.speed = baseSpeed + RandomNormal(0.0f, 0.2f);
+
+    // 防止速度过慢倒着飞
+    if (s.speed < 0.5f)
+        s.speed = 0.5f;
+
+    // === 初始相位 ===
+    s.angle = RandomFloat(0.0f, 6.28f);
 }
 
 void SnowEngine::Initialize(int screenWidth, int screenHeight)
 {
     m_snowflakes.clear();
-    int count = 3000;  // 雪花数量
+    int count = 500;  // 雪花数量
 
     for (int i = 0; i < count; i++)
     {
@@ -57,8 +106,7 @@ void SnowEngine::Update(int                          screenWidth,
 {
     for (auto &s : m_snowflakes)
     {
-        // ================= Case A: 堆积/融化状态
-        // (这一部分您之前改得没问题，保持逻辑) =================
+        // ================= Case A: 堆积/融化状态 =================
         if (s.landed)
         {
             bool isStillSafe = false;
@@ -117,13 +165,28 @@ void SnowEngine::Update(int                          screenWidth,
             continue;
         }
 
-        // ================= Case B: 空中飘落状态 (这里是 Bug 的源头！)
-        // =================
+        // ================= Case B: 空中飘落状态 =================
 
-        s.y += s.speed;
-        s.angle += 0.03f;
-        s.x += sin(s.angle) * 0.5f;
-        s.x += 0.2f;  // 风力
+        // [摇摆相位]
+        // 既然要随机性，那摇摆的频率(变化快慢)也可以和大小挂钩
+        // 小雪花飘得急(频率高)，大雪花飘得缓(频率低)
+        float frequency = 0.02f + (10.0f - s.size) * 0.005f;
+        s.angle += frequency;
+
+        // [摇摆幅度]
+        // sin(s.angle) 产生 -1 ~ 1 的波形
+        // 0.5f 是基础摆动幅度
+        float swing = sin(s.angle) * 0.5f;
+
+        // === 优化 3: 差异化风力 ===
+        // 我们利用 s.speed (它已经包含了大小信息) 作为系数
+        // 速度快(大/近)的雪花，横向移动也应该快一点 (视差)
+        // 0.5f 是一个调节系数，你可以改
+        float effectiveWind = m_windForce * (s.speed * 0.5f);
+
+        // 应用位置更新
+        s.x += effectiveWind + swing;    // 差异化风力 + 独立摇摆
+        s.y += s.speed * m_speedFactor;  // 差异化速度 * 全局重力倍率
 
         // 碰撞检测
         if (s.y > 0 && s.y < screenHeight)
@@ -189,35 +252,135 @@ void SnowEngine::Update(int                          screenWidth,
     }
 }
 
+// 创建“印章”
+void SnowEngine::CreateSnowBitmap(ID2D1HwndRenderTarget *pRenderTarget)
+{
+    // 1. 创建一个临时的“画布”，大小为 32x32
+    // 我们画一个高清晰度的雪花，然后渲染时缩放它，这样效果最好
+    ID2D1BitmapRenderTarget *pCompatibleRenderTarget = nullptr;
+    D2D1_SIZE_F              size = D2D1::SizeF(32.0f, 32.0f);
+
+    HRESULT hr = pRenderTarget->CreateCompatibleRenderTarget(
+        size, &pCompatibleRenderTarget);
+    if (FAILED(hr))
+        return;
+
+    // 2. 在临时画布上画一个完美的渐变雪花
+    pCompatibleRenderTarget->BeginDraw();
+    pCompatibleRenderTarget->Clear(D2D1::ColorF(0, 0, 0, 0));  // 透明背景
+
+    // 创建临时的渐变刷子
+    ID2D1RadialGradientBrush    *pTempBrush = nullptr;
+    ID2D1GradientStopCollection *pTempStops = nullptr;
+    D2D1_GRADIENT_STOP           stops[]    = {
+        {0.0f, D2D1::ColorF(D2D1::ColorF::White, 1.0f)},  // 中心白
+        {1.0f, D2D1::ColorF(D2D1::ColorF::White, 0.0f)}  // 边缘透
+    };
+
+    pCompatibleRenderTarget->CreateGradientStopCollection(
+        stops, 2, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &pTempStops);
+
+    if (pTempStops)
+    {
+        pCompatibleRenderTarget->CreateRadialGradientBrush(
+            D2D1::RadialGradientBrushProperties(
+                D2D1::Point2F(16, 16), D2D1::Point2F(0, 0), 16, 16),
+            pTempStops,
+            &pTempBrush);
+    }
+
+    if (pTempBrush)
+    {
+        pCompatibleRenderTarget->FillEllipse(
+            D2D1::Ellipse(D2D1::Point2F(16, 16), 16, 16), pTempBrush);
+    }
+
+    pCompatibleRenderTarget->EndDraw();
+
+    // 3. 把画好的结果取出来，存成位图 (印章)
+    pCompatibleRenderTarget->GetBitmap(&m_pSnowBitmap);
+
+    // 4. 清理临时工具
+    if (pTempBrush)
+        pTempBrush->Release();
+    if (pTempStops)
+        pTempStops->Release();
+    pCompatibleRenderTarget->Release();
+}
+
 void SnowEngine::Render(ID2D1HwndRenderTarget    *pRenderTarget,
                         ID2D1RadialGradientBrush *pBrush)
 {
+    // 如果“印章”还没做，赶紧做一个
+    if (!m_pSnowBitmap)
+    {
+        CreateSnowBitmap(pRenderTarget);
+        if (!m_pSnowBitmap)
+            return;  // 创建失败就别画了
+    }
+
     pRenderTarget->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
     for (const auto &s : m_snowflakes)
     {
-        // 只有看得见的才画
         if (s.size > 0.1f)
         {
             // 动态调整透明度
             float opacity = 0.8f;
-
-            // 如果正在融化，透明度也跟着降低
             if (s.landed)
-            {
                 opacity *= s.life;
-            }
 
-            pBrush->SetOpacity(opacity);
+            // --- 核心差异：从 FillEllipse 变成了 DrawBitmap ---
 
-            // 每次都需要设置变换吗？其实可以优化，
-            // 但为了简单，直接修改 Center 和 Radius
-            pBrush->SetCenter(D2D1::Point2F(s.x, s.y));
-            pBrush->SetRadiusX(s.size);
-            pBrush->SetRadiusY(s.size);
+            // 计算目标矩形：把 32x32 的印章，缩放到 s.size 大小
+            // s.x, s.y 是中心点
+            D2D1_RECT_F destRect = D2D1::RectF(
+                s.x - s.size, s.y - s.size, s.x + s.size, s.y + s.size);
 
-            pRenderTarget->FillEllipse(
-                D2D1::Ellipse(D2D1::Point2F(s.x, s.y), s.size, s.size), pBrush);
+            // 盖章！
+            pRenderTarget->DrawBitmap(m_pSnowBitmap,
+                                      destRect,
+                                      opacity,
+                                      D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                                      NULL  // 源矩形 NULL 表示使用整个位图
+            );
         }
     }
 }
+
+// 调整雪花数量
+void SnowEngine::SetFlakeCount(int count)
+{
+    // 限制一下范围，别把电脑炸了
+    if (count < 0)
+        count = 0;
+    if (count > 5000)
+        count = 5000;
+
+    int currentSize = (int)m_snowflakes.size();
+    if (count > currentSize)
+    {
+        // 需要增加：补足差额
+        for (int i = 0; i < count - currentSize; ++i)
+        {
+            Snowflake s;
+            // 随便给个位置，之后 Reset 会修正
+            s.x      = 0;
+            s.y      = -10.0f;
+            s.landed = false;
+            s.life   = 0.0f;  // 设为0让它重生
+            m_snowflakes.push_back(s);
+        }
+    }
+    else if (count < currentSize)
+    {
+        // 需要减少：直接截断
+        m_snowflakes.resize(count);
+    }
+}
+
+// 调整雪花重力（下降速度）
+void SnowEngine::SetGravity(float g) { m_speedFactor = g; }
+
+// 调整雪花风力（左右飘动）
+void SnowEngine::SetWind(float w) { m_windForce = w; }
