@@ -50,7 +50,7 @@ INT_PTR CALLBACK About(HWND, UINT, WPARAM, LPARAM);
 
 // 全局设置状态
 HWND  g_hSettingsDlg = nullptr;  // 记录设置窗口是不是开着
-int   g_snowCount    = 500;      // 记住当前的雪量
+int   g_snowCount    = 1000;      // 记住当前的雪量
 float g_snowSpeed    = 1.0f;     // 记住当前的速度
 float g_snowWind     = 0.0f;     // 记住当前的风力
 
@@ -166,7 +166,7 @@ INT_PTR CALLBACK Settings(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
         if (LOWORD(wParam) == IDC_BTN_RESET)
         {
             // 1. 恢复默认全局变量
-            g_snowCount = 500;
+            g_snowCount = 1000;
             g_snowSpeed = 1.0f;
             g_snowWind  = 0.0f;
 

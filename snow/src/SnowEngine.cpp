@@ -48,9 +48,11 @@ void SnowEngine::ResetSnowflake(Snowflake &s, int screenWidth, int screenHeight)
     s.landed = false;
     s.life   = 1.0f;  // 满血复活
 
-    // 随机出生在屏幕上方
-    s.x = RandomFloat(0.0f, (float)screenWidth);
-    s.y = RandomFloat(-50.0f, -10.0f);
+    // 左右各外扩 300 像素 (Buffer Zone)
+    // 这样风往右吹时，左边 -300 处的雪花会飘进屏幕填补空白
+    float margin = 300.0f;
+    s.x          = RandomFloat(-margin, (float)screenWidth + margin);
+    s.y          = RandomFloat(-50.0f, -10.0f);  // 随机出生在屏幕上方
 
     // === 核心修改：大小使用正态分布 ===
     // 均值 5.0 (大部分雪花是中等偏大)
@@ -85,7 +87,7 @@ void SnowEngine::ResetSnowflake(Snowflake &s, int screenWidth, int screenHeight)
 void SnowEngine::Initialize(int screenWidth, int screenHeight)
 {
     m_snowflakes.clear();
-    int count = 500;  // 雪花数量
+    int count = 1000;  // 雪花数量
 
     for (int i = 0; i < count; i++)
     {
@@ -245,10 +247,26 @@ void SnowEngine::Update(int                          screenWidth,
         }
 
         // 边界检查
+        // 定义一个宽容度 (Margin)，必须和 ResetSnowflake 里保持一致或更大
+        float margin = 300.0f;
+
+        // 掉出屏幕下方 -> 重置
         if (s.y > screenHeight)
         {
             ResetSnowflake(s, screenWidth, screenHeight);
         }
+
+        // === 左右循环逻辑修正 ===
+        // 只有当雪花完全飞出缓冲区(跑得老远了)才让它瞬移回来
+        // 这样保证了屏幕边缘的雪花是自然进出的
+
+        // 向右飞出：飞过 screenWidth + 300 才瞬移到左边 -300
+        if (s.x > screenWidth + margin)
+            s.x = -margin;
+
+        // 向左飞出：飞过 -300 才瞬移到右边 screenWidth + 300
+        if (s.x < -margin)
+            s.x = (float)screenWidth + margin;
     }
 }
 
