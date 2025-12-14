@@ -29,7 +29,8 @@ class SnowEngine
     // 更新：传入屏幕大小（应对分辨率改变）
     void Update(int                          screenWidth,
                 int                          screenHeight,
-                const std::vector<Obstacle> &obstacles);
+                const std::vector<Obstacle> &obstacles,
+                POINT                        mousePos);
 
     // 渲染：传入 Direct2D 的 RenderTarget 和画笔
     void Render(ID2D1HwndRenderTarget    *pRenderTarget,

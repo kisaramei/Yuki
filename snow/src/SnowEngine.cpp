@@ -1,6 +1,9 @@
 #include "SnowEngine.h"
 #include <random>
 
+extern bool  g_bEnableMouseInteraction;
+extern POINT g_ptLastMouse;
+
 // 构造函数
 SnowEngine::SnowEngine() {}
 
@@ -104,8 +107,16 @@ void SnowEngine::Initialize(int screenWidth, int screenHeight)
 
 void SnowEngine::Update(int                          screenWidth,
                         int                          screenHeight,
-                        const std::vector<Obstacle> &obstacles)
+                        const std::vector<Obstacle> &obstacles,
+                        POINT                        mousePos)
 {
+    float interactionRadius = 100.0f;  // 定义鼠标的“影响半径” (像素)
+    float forceStrength = 20.0f;       // 定义“神之手”的力量大小
+
+    // 判断鼠标是否在移动
+    bool isMouseMoving =
+        (mousePos.x != g_ptLastMouse.x || mousePos.y != g_ptLastMouse.y);
+
     for (auto &s : m_snowflakes)
     {
         // ================= Case A: 堆积/融化状态 =================
@@ -168,6 +179,35 @@ void SnowEngine::Update(int                          screenWidth,
         }
 
         // ================= Case B: 空中飘落状态 =================
+        // 鼠标斥力计算，只有当：[功能开启] 且 [鼠标在动] 时，才计算斥力
+        if (g_bEnableMouseInteraction && isMouseMoving)
+        {
+            float dx = s.x - mousePos.x;
+            float dy = s.y - mousePos.y;
+
+            // 计算距离平方
+            float distSq   = dx * dx + dy * dy;
+            float radiusSq = interactionRadius * interactionRadius;
+
+            // 只有在半径内的雪花才受影响
+            if (distSq < radiusSq && distSq > 1.0f)
+            {
+                float dist = sqrt(distSq);
+
+                float dirX = dx / dist;
+                float dirY = dy / dist;
+
+                // 简单的线性衰减斥力
+                float power = (1.0f - dist / interactionRadius) * forceStrength;
+
+                // 也可以根据移动速度加成，不过目前这样就够了
+                s.x += dirX * power;
+                s.y += dirY * power;
+
+                // 稍微给点垂直方向的扰动，防止雪花被推得太整齐
+                s.x += dirX * power * 0.1f;
+            }
+        }
 
         // [摇摆相位]
         // 既然要随机性，那摇摆的频率(变化快慢)也可以和大小挂钩

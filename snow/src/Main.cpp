@@ -49,10 +49,12 @@ LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK About(HWND, UINT, WPARAM, LPARAM);
 
 // 全局设置状态
-HWND  g_hSettingsDlg = nullptr;  // 记录设置窗口是不是开着
-int   g_snowCount    = 1000;      // 记住当前的雪量
-float g_snowSpeed    = 1.0f;     // 记住当前的速度
-float g_snowWind     = 0.0f;     // 记住当前的风力
+HWND  g_hSettingsDlg            = nullptr;  // 记录设置窗口是不是开着
+int   g_snowCount               = 1000;     // 记住当前的雪量
+float g_snowSpeed               = 1.0f;     // 记住当前的速度
+float g_snowWind                = 0.0f;     // 记住当前的风力
+bool  g_bEnableMouseInteraction = false;    // 交互功能开关，默认关闭
+POINT g_ptLastMouse = {0, 0};  // 记录上一帧的鼠标位置，用于计算移动
 
 // ---------------------------------------------------------
 //  设置窗口的处理函数 (非模态版)
@@ -114,6 +116,11 @@ INT_PTR CALLBACK Settings(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
                            TRUE,
                            (int)(g_snowWind * 10 + 20));
 
+        // 回显鼠标交互开关状态
+        CheckDlgButton(hDlg,
+                       IDC_CHECK_MOUSE,
+                       g_bEnableMouseInteraction ? BST_CHECKED : BST_UNCHECKED);
+
         // === 4. 更新文字显示 ===
         wchar_t buf[32];
         wsprintf(buf, L"%d", g_snowCount);  // 显示实际数量
@@ -162,13 +169,14 @@ INT_PTR CALLBACK Settings(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
         return (INT_PTR)TRUE;
     }
 
-    case WM_COMMAND:
+    case WM_COMMAND: {
         if (LOWORD(wParam) == IDC_BTN_RESET)
         {
             // 1. 恢复默认全局变量
-            g_snowCount = 1000;
-            g_snowSpeed = 1.0f;
-            g_snowWind  = 0.0f;
+            g_snowCount               = 1000;
+            g_snowSpeed               = 1.0f;
+            g_snowWind                = 0.0f;
+            g_bEnableMouseInteraction = false;
 
             // 2. 立即应用到引擎 (所见即所得)
             g_Engine.SetFlakeCount(g_snowCount);
@@ -191,6 +199,8 @@ INT_PTR CALLBACK Settings(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
                                TBM_SETPOS,
                                TRUE,
                                (int)(g_snowWind * 10 + 20));  // 0.0 -> 20
+
+            CheckDlgButton(hDlg, IDC_CHECK_MOUSE, BST_UNCHECKED);
 
             // 4. 刷新界面文字
             wchar_t buf[32];
@@ -226,6 +236,16 @@ INT_PTR CALLBACK Settings(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
             g_snowSpeed = realSpeed;
             g_snowWind  = realWind;
 
+            // 保存复选框状态
+            if (IsDlgButtonChecked(hDlg, IDC_CHECK_MOUSE) == BST_CHECKED)
+            {
+                g_bEnableMouseInteraction = true;
+            }
+            else
+            {
+                g_bEnableMouseInteraction = false;
+            }
+
             // 3. 应用到引擎
             g_Engine.SetFlakeCount(g_snowCount);
             g_Engine.SetGravity(g_snowSpeed);
@@ -240,6 +260,7 @@ INT_PTR CALLBACK Settings(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
             return (INT_PTR)TRUE;
         }
         break;
+    }
     }
     return (INT_PTR)FALSE;
 }
@@ -507,14 +528,18 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 lastObstacleUpdate = tick;
             }
 
-            // 2. 更新物理引擎
+            // 2. 获取屏幕尺寸
             int sw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
             int sh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-            g_Engine.Update(sw, sh, g_Obstacles);
 
-            // 3. 渲染
-            // 注意：Render 可能会被阻塞，如果电脑卡顿，WM_TIMER 可能会积压，
-            // 但对于这种小工具来说，直接在这里 Render 是最简单的方案。
+            // 3. 获取鼠标位置
+            POINT ptMouse;
+            GetCursorPos(&ptMouse);  // 获取全局鼠标坐标
+
+            // 3. 调用更新
+            g_Engine.Update(sw, sh, g_Obstacles, ptMouse);
+
+            // 4. 渲染
             Render(hWnd);
         }
         break;
